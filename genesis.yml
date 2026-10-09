@@ -1,0 +1,106 @@
+
+name: DailyForge AI Developer
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate project
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4.1-mini
+        run: python dailyforge.py
+
+      - name: Save generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-project
+          path: output/
+          if-no-files-found: error
+          retention-days: 2
+
+  test:
+    needs: generate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: daily-project
+          path: output/
+
+      - name: Install test runner
+        run: pip install pytest
+
+      - name: Check Python syntax
+        run: python -m compileall -q output/project
+
+      - name: Run generated tests
+        working-directory: output/project
+        run: python -m pytest -q
+
+  publish:
+    needs: [generate, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: daily-project
+          path: output/
+
+      - name: Publish project
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          SLUG=$(python -c "import json; print(json.load(open('output/metadata.json'))['slug'])")
+          DATE=$(date -u +%F)
+          DEST="projects/${DATE}-${SLUG}"
+
+          mkdir -p projects
+          cp -R output/project "$DEST"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- "$DEST"
+          git diff --cached --quiet && exit 0
+
+          git commit -m "Add daily project: ${SLUG}"
+          git push
